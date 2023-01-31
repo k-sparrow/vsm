@@ -5,6 +5,7 @@ from soundfile import read
 from tqdm import tqdm
 from pesq import pesq
 import pandas as pd
+import librosa
 
 from pystoi import stoi
 
@@ -29,9 +30,10 @@ if __name__ == '__main__':
     noisy_files = sorted(glob('{}/*.wav'.format(noisy_dir)))
     for noisy_file in tqdm(noisy_files):
         filename = noisy_file.split('/')[-1]
-        x, _ = read(join(clean_dir, filename))
-        y, _ = read(noisy_file)
-        n = y - x 
+        # x, _ = read(join(clean_dir, filename))
+        x, _ = librosa.load(join(clean_dir, filename), sr=sr)
+        y, _ = librosa.load(noisy_file, sr=sr)
+        n = y - x
         x_method, _ = read(join(enhanced_dir, filename))
 
         data["filename"].append(filename)

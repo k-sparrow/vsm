@@ -5,6 +5,7 @@ from os.path import join
 import torch
 from soundfile import write
 from torchaudio import load
+import librosa
 from tqdm import tqdm
 
 from sgmse.model import ScoreModel
@@ -45,7 +46,8 @@ if __name__ == '__main__':
         filename = noisy_file.split('/')[-1]
         
         # Load wav
-        y, _ = load(noisy_file) 
+        y, rate = librosa.load(noisy_file, sr=sr)
+        y = torch.from_numpy(y).unsqueeze(0)
         T_orig = y.size(1)   
 
         # Normalize
@@ -69,4 +71,4 @@ if __name__ == '__main__':
         x_hat = x_hat * norm_factor
 
         # Write enhanced wav file
-        write(join(target_dir, filename), x_hat.cpu().numpy(), 16000)
+        write(join(target_dir, filename), x_hat.cpu().numpy(), rate)
