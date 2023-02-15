@@ -620,6 +620,7 @@ class ResnetBlockDDPM(nn.Module):
   """The ResNet Blocks used in DDPM."""
   def __init__(self, act, in_ch, out_ch=None, temb_dim=None, conv_shortcut=False, dropout=0.1):
     super().__init__()
+    self.gradient_checkpoint = False
     if out_ch is None:
       out_ch = in_ch
     self.GroupNorm_0 = nn.GroupNorm(num_groups=32, num_channels=in_ch, eps=1e-6)

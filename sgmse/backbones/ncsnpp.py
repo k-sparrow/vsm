@@ -17,6 +17,7 @@
 
 from .ncsnpp_utils import layers, layerspp, normalization
 import torch.nn as nn
+import torch.utils.checkpoint
 import functools
 import torch
 import numpy as np
@@ -254,7 +255,22 @@ class NCSNpp(nn.Module):
         parser.set_defaults(centered=True)
         return parser
 
+    @staticmethod
+    def block_checkpointer(module: torch.nn.Module):
+        if isinstance(module, (ResnetBlockDDPM, ResnetBlockBigGAN)):
+            module.gradient_checkpoint = True
+
+    def gradient_checkpoint_enable(self):
+        self.apply(self.block_checkpointer)
+
     def forward(self, x, time_cond):
+        # for the use of gradient and activation checkpointing
+        def create_custom_forward(module):
+            def custom_forward(*inputs):
+                # None for past_key_value
+                return module(*inputs)
+
+            return custom_forward
         # timestep/noise_level embedding; only for continuous training
         modules = self.all_modules
         m_idx = 0
@@ -299,11 +315,20 @@ class NCSNpp(nn.Module):
         hs = [modules[m_idx](x)]
         m_idx += 1
 
+
         # Down path in U-Net
         for i_level in range(self.num_resolutions):
             # Residual blocks for this resolution
             for i_block in range(self.num_res_blocks):
-                h = modules[m_idx](hs[-1], temb)
+
+                block = modules[m_idx]
+                if isinstance(block, (ResnetBlockDDPM, ResnetBlockBigGAN)) and block.gradient_checkpoint:
+                    h = torch.utils.checkpoint.checkpoint(create_custom_forward(block),
+                                                          hs[-1],
+                                                          temb)
+                else:
+                    h = block(hs[-1], temb)
+
                 m_idx += 1
                 # Attention layer (optional)
                 if h.shape[-2] in self.attn_resolutions: # edit: check H dim (-2) not W dim (-1)
@@ -313,11 +338,20 @@ class NCSNpp(nn.Module):
 
             # Downsampling
             if i_level != self.num_resolutions - 1:
+                block = modules[m_idx]
                 if self.resblock_type == 'ddpm':
-                    h = modules[m_idx](hs[-1])
+                    if block.gradient_checkpoint:
+                        h = torch.utils.checkpoint.checkpoint(create_custom_forward(block), hs[-1])
+                    else:
+                        h = modules[m_idx](hs[-1])
                     m_idx += 1
                 else:
-                    h = modules[m_idx](hs[-1], temb)
+                    if block.gradient_checkpoint:
+                        h = torch.utils.checkpoint.checkpoint(create_custom_forward(block),
+                                                              hs[-1],
+                                                              temb)
+                    else:
+                        h = modules[m_idx](hs[-1], temb)
                     m_idx += 1
 
                 if self.progressive_input == 'input_skip':   # Combine h with x
@@ -336,11 +370,19 @@ class NCSNpp(nn.Module):
                 hs.append(h)
 
         h = hs[-1] # actualy equal to: h = h
-        h = modules[m_idx](h, temb)  # ResNet block
+        block = modules[m_idx]
+        if isinstance(block, (ResnetBlockDDPM, ResnetBlockBigGAN)) and block.gradient_checkpoint:
+            h = torch.utils.checkpoint.checkpoint(create_custom_forward(block), h, temb)
+        else:
+            h = modules[m_idx](h, temb)  # ResNet block
         m_idx += 1
         h = modules[m_idx](h)  # Attention block
         m_idx += 1
-        h = modules[m_idx](h, temb)  # ResNet block
+        block = modules[m_idx]
+        if isinstance(block, (ResnetBlockDDPM, ResnetBlockBigGAN)) and block.gradient_checkpoint:
+            h = torch.utils.checkpoint.checkpoint(create_custom_forward(block), h, temb)
+        else:
+            h = modules[m_idx](h, temb)  # ResNet block
         m_idx += 1
 
         pyramid = None
@@ -348,7 +390,13 @@ class NCSNpp(nn.Module):
         # Upsampling block
         for i_level in reversed(range(self.num_resolutions)):
             for i_block in range(self.num_res_blocks + 1):
-                h = modules[m_idx](torch.cat([h, hs.pop()], dim=1), temb)
+                block = modules[m_idx]
+                if isinstance(block, (ResnetBlockDDPM, ResnetBlockBigGAN)) and block.gradient_checkpoint:
+                    h = torch.utils.checkpoint.checkpoint(create_custom_forward(block),
+                                                          torch.cat([h, hs.pop()], dim=1),
+                                                          temb)
+                else:
+                    h = modules[m_idx](torch.cat([h, hs.pop()], dim=1), temb)
                 m_idx += 1
 
             # edit: from -1 to -2
@@ -391,11 +439,20 @@ class NCSNpp(nn.Module):
 
             # Upsampling Layer
             if i_level != 0:
+                block = modules[m_idx]
                 if self.resblock_type == 'ddpm':
-                    h = modules[m_idx](h)
+                    if block.gradient_checkpoint:
+                        h = torch.utils.checkpoint.checkpoint(create_custom_forward(block), h)
+                    else:
+                        h = modules[m_idx](h)
                     m_idx += 1
                 else:
-                    h = modules[m_idx](h, temb)  # Upspampling
+                    if block.gradient_checkpoint:
+                        h = torch.utils.checkpoint.checkpoint(create_custom_forward(block),
+                                                              h,
+                                                              temb)
+                    else:
+                        h = modules[m_idx](h, temb)  # Upspampling
                     m_idx += 1
 
         assert not hs

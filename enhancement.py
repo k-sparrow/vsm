@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from sgmse.model import ScoreModel
 from sgmse.util.other import ensure_dir, pad_spec
+from sgmse.backbones.ncsnpp import NCSNpp
 
 if __name__ == '__main__':
     parser = ArgumentParser()
@@ -39,6 +40,9 @@ if __name__ == '__main__':
     model = ScoreModel.load_from_checkpoint(checkpoint_file, base_dir='', batch_size=16, num_workers=0, kwargs=dict(gpu=False))
     model.eval(no_ema=False)
     model.cuda()
+
+    if isinstance(model.dnn, NCSNpp):
+        model.dnn.gradient_checkpoint_enable()
 
     noisy_files = sorted(glob.glob('{}/*.wav'.format(noisy_dir)))
 

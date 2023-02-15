@@ -1,7 +1,9 @@
 
 from os.path import join
+from pathlib import Path
 import torch
 import pytorch_lightning as pl
+import torchaudio.functional
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from glob import glob
@@ -21,13 +23,16 @@ def get_window(window_type, window_length):
 
 class Specs(Dataset):
     def __init__(self, data_dir, subset, dummy, shuffle_spec, num_frames,
-            format='default', normalize="noisy", spec_transform=None,
-            stft_kwargs=None, **ignored_kwargs):
+            format='default', normalize="noisy", spec_transform=None,  sr: int = 16000,
+            stft_kwargs = None, **ignored_kwargs):
 
         # Read file paths according to file naming format.
         if format == "default":
             self.clean_files = sorted(glob(join(data_dir, subset) + '/clean/*.wav'))
             self.noisy_files = sorted(glob(join(data_dir, subset) + '/noisy/*.wav'))
+
+            # check we load the same files in the same order for clean and noisy files
+            self.__verify_clean_noisy_files()
         else:
             # Feel free to add your own directory format
             raise NotImplementedError(f"Directory format {format} unknown!")
@@ -37,15 +42,25 @@ class Specs(Dataset):
         self.shuffle_spec = shuffle_spec
         self.normalize = normalize
         self.spec_transform = spec_transform
+        self.sr = sr
 
         assert all(k in stft_kwargs.keys() for k in ["n_fft", "hop_length", "center", "window"]), "misconfigured STFT kwargs"
         self.stft_kwargs = stft_kwargs
         self.hop_length = self.stft_kwargs["hop_length"]
         assert self.stft_kwargs.get("center", None) == True, "'center' must be True for current implementation"
 
+    def __verify_clean_noisy_files(self):
+        for clean_file, noisy_file in zip(self.clean_files, self.noisy_files):
+            assert Path(clean_file).stem == Path(noisy_file).stem
+
     def __getitem__(self, i):
-        x, _ = load(self.clean_files[i])
-        y, _ = load(self.noisy_files[i])
+        x, sr = load(self.clean_files[i])
+        if sr != self.sr:
+            x = torchaudio.functional.resample(x, orig_freq=sr, new_freq=self.sr)
+
+        y, sr = load(self.noisy_files[i])
+        if sr != self.sr:
+            y = torchaudio.functional.resample(y, orig_freq=sr, new_freq=self.sr)
 
         # formula applies for center=True
         target_len = (self.num_frames - 1) * self.hop_length

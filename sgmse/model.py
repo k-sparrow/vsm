@@ -43,12 +43,14 @@ class ScoreModel(pl.LightningModule):
         """
         super().__init__()
         # Initialize Backbone DNN
+        self.backbone = backbone
         self.dnn_cls = BackboneRegistry.get_by_name(backbone)
         # Initialize SDE
         self.sde_cls = SDERegistry.get_by_name(sde)
         # Store hyperparams and save them
         self.lr = lr
         self.ema_decay = ema_decay
+        self.ema = ExponentialMovingAverage(self.parameters(), decay=self.ema_decay)
         self._error_loading_ema = False
         self.t_eps = t_eps
         self.loss_type = loss_type
@@ -63,6 +65,8 @@ class ScoreModel(pl.LightningModule):
         self.dnn = self.dnn_cls(**self.kwargs)
         self.sde = self.sde_cls(**self.kwargs)
         self.ema = ExponentialMovingAverage(self.dnn.parameters(), decay=self.ema_decay)
+        if self.backbone == "ncsnpp":
+            self.dnn.gradient_checkpoint_enable()
 
     def configure_optimizers(self):
         optimizer = HybridAdam(self.parameters(), lr=self.lr)

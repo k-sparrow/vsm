@@ -215,6 +215,7 @@ class ResnetBlockBigGANpp(nn.Module):
                skip_rescale=True, init_scale=0.):
     super().__init__()
 
+    self.gradient_checkpoint = False
     out_ch = out_ch if out_ch else in_ch
     self.GroupNorm_0 = nn.GroupNorm(num_groups=min(in_ch // 4, 32), num_channels=in_ch, eps=1e-6)
     self.up = up
