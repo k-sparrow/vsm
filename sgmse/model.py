@@ -12,6 +12,9 @@ from sgmse.backbones import BackboneRegistry
 from sgmse.util.inference import evaluate_model
 from sgmse.util.other import pad_spec
 
+from colossalai.nn.optimizer import HybridAdam
+from pytorch_lightning.strategies.colossalai import ColossalAIStrategy
+
 
 class ScoreModel(pl.LightningModule):
     @staticmethod
@@ -40,15 +43,12 @@ class ScoreModel(pl.LightningModule):
         """
         super().__init__()
         # Initialize Backbone DNN
-        dnn_cls = BackboneRegistry.get_by_name(backbone)
-        self.dnn = dnn_cls(**kwargs)
+        self.dnn_cls = BackboneRegistry.get_by_name(backbone)
         # Initialize SDE
-        sde_cls = SDERegistry.get_by_name(sde)
-        self.sde = sde_cls(**kwargs)
+        self.sde_cls = SDERegistry.get_by_name(sde)
         # Store hyperparams and save them
         self.lr = lr
         self.ema_decay = ema_decay
-        self.ema = ExponentialMovingAverage(self.parameters(), decay=self.ema_decay)
         self._error_loading_ema = False
         self.t_eps = t_eps
         self.loss_type = loss_type
@@ -57,14 +57,22 @@ class ScoreModel(pl.LightningModule):
         self.save_hyperparameters(ignore=['no_wandb'])
         self.data_module = data_module_cls(**kwargs, gpu=kwargs.get('gpus', 0) > 0)
 
+        self.kwargs = kwargs
+
+    def configure_sharded_model(self) -> None:
+        self.dnn = self.dnn_cls(**self.kwargs)
+        self.sde = self.sde_cls(**self.kwargs)
+        self.ema = ExponentialMovingAverage(self.dnn.parameters(), decay=self.ema_decay)
+
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        optimizer = HybridAdam(self.parameters(), lr=self.lr)
         return optimizer
 
     def optimizer_step(self, *args, **kwargs):
         # Method overridden so that the EMA params are updated after each optimizer step
         super().optimizer_step(*args, **kwargs)
-        self.ema.update(self.parameters())
+        cpu_params = [p.to("cpu") for p in self.parameters()]
+        self.ema.update(cpu_params)
 
     # on_load_checkpoint / on_save_checkpoint needed for EMA storing/loading
     def on_load_checkpoint(self, checkpoint):
@@ -137,7 +145,12 @@ class ScoreModel(pl.LightningModule):
     def forward(self, x, t, y):
         # Concatenate y as an extra channel
         dnn_input = torch.cat([x, y], dim=1)
-        
+
+        # convert input to float 16
+        if isinstance(self.trainer.strategy, ColossalAIStrategy):
+            dnn_input = dnn_input.to(torch.complex32)
+            t = t.to(torch.float16)
+
         # the minus is most likely unimportant here - taken from Song's repo
         score = -self.dnn(dnn_input, t)
         return score

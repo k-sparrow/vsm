@@ -5,7 +5,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.plugins import DDPPlugin
 from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
-
+from pytorch_lightning.strategies.colossalai import ColossalAIStrategy
 import wandb
 
 from sgmse.backbones.shared import BackboneRegistry
@@ -81,7 +81,13 @@ if __name__ == '__main__':
      # Initialize the Trainer and the DataModule
      trainer = pl.Trainer.from_argparse_args(
           arg_groups['pl.Trainer'],
-          strategy=DDPPlugin(find_unused_parameters=False), logger=logger,
+          # strategy=DDPPlugin(find_unused_parameters=False),
+          strategy=ColossalAIStrategy(placement_policy="auto",
+                                      accelerator="gpu",
+                                      min_chunk_size=32 * 1024**2,
+                                      initial_scale=32),
+          precision=16,
+          logger=logger,
           log_every_n_steps=10, num_sanity_val_steps=0,
           callbacks=callbacks
      )

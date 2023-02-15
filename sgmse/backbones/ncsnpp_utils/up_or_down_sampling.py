@@ -220,7 +220,7 @@ def upsample_2d(x, k=None, factor=2, gain=1):
     k = [1] * factor
   k = _setup_kernel(k) * (gain * (factor ** 2))
   p = k.shape[0] - factor
-  return upfirdn2d(x, torch.tensor(k, device=x.device),
+  return upfirdn2d(x, torch.tensor(k, device=x.device, dtype=x.dtype),
                    up=factor, pad=((p + 1) // 2 + factor - 1, p // 2))
 
 
@@ -253,5 +253,5 @@ def downsample_2d(x, k=None, factor=2, gain=1):
     k = [1] * factor
   k = _setup_kernel(k) * gain
   p = k.shape[0] - factor
-  return upfirdn2d(x, torch.tensor(k, device=x.device),
+  return upfirdn2d(x, torch.tensor(k, device=x.device, dtype=x.dtype),
                    down=factor, pad=((p + 1) // 2, p // 2))
