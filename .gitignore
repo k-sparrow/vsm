@@ -332,3 +332,12 @@ $RECYCLE.BIN/
 /wandb
 /lightning_logs
 /logs
+/datasets
+/ckpts
+/dereverbed
+/enhanced
+/.idea
+
+## misc
+*.ipynb
+*.cfg
