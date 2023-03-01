@@ -4,7 +4,7 @@ from argparse import ArgumentParser
 import pytorch_lightning as pl
 from pytorch_lightning.plugins import DDPPlugin
 from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.strategies.colossalai import ColossalAIStrategy
 import wandb
 
@@ -70,7 +70,8 @@ if __name__ == '__main__':
           logger.experiment.log_code(".")
 
      # Set up callbacks for logger
-     callbacks = [ModelCheckpoint(dirpath=f"logs/{logger.version}", save_last=True, filename='{epoch}-last')]
+     callbacks = [ModelCheckpoint(dirpath=f"logs/{logger.version}", save_last=True, filename='{epoch}-last'),
+                  EarlyStopping(monitor="val_loss", patience=10)]
      if args.num_eval_files:
           checkpoint_callback_pesq = ModelCheckpoint(dirpath=f"logs/{logger.version}", 
                save_top_k=2, monitor="pesq", mode="max", filename='{epoch}-{pesq:.2f}')

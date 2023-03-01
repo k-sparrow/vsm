@@ -11,6 +11,7 @@ from sgmse.util.tensors import batch_broadcast
 import torch
 
 from sgmse.util.registry import Registry
+import torch.nn as nn
 
 
 SDERegistry = Registry("SDE")
@@ -141,8 +142,18 @@ class SDE(abc.ABC):
         pass
 
 
+class LearnedLinearSchedule(nn.Module):
+    def __init__(self, gamma_min, gamma_max):
+        super().__init__()
+        self.b = nn.Parameter(torch.tensor(gamma_min))
+        self.w = nn.Parameter(torch.tensor(gamma_max - gamma_min))
+
+    def forward(self, t):
+        return self.b + self.w.abs() * t
+
+
 @SDERegistry.register("ouve")
-class OUVESDE(SDE):
+class OUVESDE(SDE, nn.Module):
     @staticmethod
     def add_argparse_args(parser):
         parser.add_argument("--sde-n", type=int, default=1000, help="The number of timesteps in the SDE discretization. 30 by default")
@@ -171,6 +182,7 @@ class OUVESDE(SDE):
         """
         super().__init__(N)
         self.theta = theta
+        self.theta_ = LearnedLinearSchedule(sigma_min, sigma_max)
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
         self.logsig = np.log(self.sigma_max / self.sigma_min)
@@ -184,7 +196,7 @@ class OUVESDE(SDE):
         return 1
 
     def sde(self, x, t, y):
-        drift = self.theta * (y - x)
+        drift = self.theta_(t) * (y - x)
         # the sqrt(2*logsig) factor is required here so that logsig does not in the end affect the perturbation kernel
         # standard deviation. this can be understood from solving the integral of [exp(2s) * g(s)^2] from s=0 to t
         # with g(t) = sigma(t) as defined here, and seeing that `logsig` remains in the integral solution
@@ -194,13 +206,13 @@ class OUVESDE(SDE):
         return drift, diffusion
 
     def _mean(self, x0, t, y):
-        theta = self.theta
+        theta = self.theta_(t)
         exp_interp = torch.exp(-theta * t)[:, None, None, None]
         return exp_interp * x0 + (1 - exp_interp) * y
 
     def _std(self, t):
         # This is a full solution to the ODE for P(t) in our derivations, after choosing g(s) as in self.sde()
-        sigma_min, theta, logsig = self.sigma_min, self.theta, self.logsig
+        sigma_min, theta, logsig = self.sigma_min, self.theta_(t), self.logsig
         # could maybe replace the two torch.exp(... * t) terms here by cached values **t
         return torch.sqrt(
             (

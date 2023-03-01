@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 from torch_ema import ExponentialMovingAverage
 
 from sgmse import sampling
-from sgmse.sdes import SDERegistry
+from sgmse.sdes import SDERegistry, OUVESDE
 from sgmse.backbones import BackboneRegistry
 from sgmse.util.inference import evaluate_model
 from sgmse.util.other import pad_spec
@@ -69,13 +69,17 @@ class ScoreModel(pl.LightningModule):
             self.dnn.gradient_checkpoint_enable()
 
     def configure_optimizers(self):
+        # params = list(self.parameters())
+        # if isinstance(self.sde, OUVESDE):
+        #     params.extend(list(self.sde.theta_.parameters()))
+
         optimizer = HybridAdam(self.parameters(), lr=self.lr)
         return optimizer
 
     def optimizer_step(self, *args, **kwargs):
         # Method overridden so that the EMA params are updated after each optimizer step
         super().optimizer_step(*args, **kwargs)
-        cpu_params = [p.to("cpu") for p in self.parameters()]
+        cpu_params = [p.to("cpu") for p in self.dnn.parameters()]
         self.ema.update(cpu_params)
 
     # on_load_checkpoint / on_save_checkpoint needed for EMA storing/loading
@@ -95,12 +99,12 @@ class ScoreModel(pl.LightningModule):
         if not self._error_loading_ema:
             if mode == False and not no_ema:
                 # eval
-                self.ema.store(self.parameters())        # store current params in EMA
-                self.ema.copy_to(self.parameters())      # copy EMA parameters over current params for evaluation
+                self.ema.store(self.dnn.parameters())        # store current params in EMA
+                self.ema.copy_to(self.dnn.parameters())      # copy EMA parameters over current params for evaluation
             else:
                 # train
                 if self.ema.collected_params is not None:
-                    self.ema.restore(self.parameters())  # restore the EMA weights (if stored)
+                    self.ema.restore(self.dnn.parameters())  # restore the EMA weights (if stored)
         return res
 
     def eval(self, no_ema=False):
