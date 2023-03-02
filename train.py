@@ -88,7 +88,8 @@ if __name__ == '__main__':
                                       initial_scale=32),
           precision=16,
           logger=logger,
-          log_every_n_steps=10, num_sanity_val_steps=0,
+          log_every_n_steps=10,
+          num_sanity_val_steps=0,
           callbacks=callbacks
      )
 
