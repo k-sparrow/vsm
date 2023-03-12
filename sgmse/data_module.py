@@ -158,10 +158,9 @@ class SpecsDataModule(pl.LightningDataModule):
             self.valid_set = Specs(data_dir=self.base_dir, subset='valid',
                 dummy=self.dummy, shuffle_spec=False, format=self.format,
                 normalize=self.normalize, **specs_kwargs)
-        if stage == 'test' or stage is None:
             self.test_set = Specs(data_dir=self.base_dir, subset='test',
-                dummy=self.dummy, shuffle_spec=False, format=self.format,
-                normalize=self.normalize, **specs_kwargs)
+                                  dummy=self.dummy, shuffle_spec=False, format=self.format,
+                                  normalize=self.normalize, **specs_kwargs)
 
     def spec_fwd(self, spec):
         if self.transform_type == "exponent":

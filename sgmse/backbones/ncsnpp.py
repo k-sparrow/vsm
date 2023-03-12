@@ -292,6 +292,8 @@ class NCSNpp(nn.Module):
             # Gaussian Fourier features embeddings.
             used_sigmas = time_cond
             temb = modules[m_idx](torch.log(used_sigmas))
+            if temb.dtype == torch.float32:
+                temb = temb.to(torch.float16)
             m_idx += 1
 
         elif self.embedding_type == 'positional':

@@ -13,6 +13,64 @@ from sgmse.data_module import SpecsDataModule
 from sgmse.sdes import SDERegistry
 from sgmse.model import ScoreModel
 
+import torch
+from torch import Tensor
+
+
+class ColossalEarlyStopping(EarlyStopping):
+    def __init__(self, *args, **kwargs):
+         super().__init__(*args, **kwargs)
+
+    def _improvement_message(self, current: Tensor) -> str:
+        """Formats a log message that informs the user about an improvement in the monitored score."""
+        if torch.isfinite(self.best_score):
+            msg = (
+                 f"Metric {self.monitor} improved by {abs(self.best_score - current)} >="
+                 f" min_delta = {abs(self.min_delta)}. New best score: {current}"
+            )
+        else:
+            msg = f"Metric {self.monitor} improved. New best score: {current}"
+        return msg
+
+    def _evaluate_stopping_criteria(self, current: Tensor):
+        should_stop = False
+        reason = None
+        if self.check_finite and not torch.isfinite(current):
+            should_stop = True
+            reason = (
+                 f"Monitored metric {self.monitor} = {current} is not finite."
+                 f" Previous best value was {self.best_score}. Signaling Trainer to stop."
+            )
+        elif self.stopping_threshold is not None and self.monitor_op(current, self.stopping_threshold):
+            should_stop = True
+            reason = (
+                 "Stopping threshold reached:"
+                 f" {self.monitor} = {current} {self.order_dict[self.mode]} {self.stopping_threshold}."
+                 " Signaling Trainer to stop."
+            )
+        elif self.divergence_threshold is not None and self.monitor_op(-current, -self.divergence_threshold):
+            should_stop = True
+            reason = (
+                 "Divergence threshold reached:"
+                 f" {self.monitor} = {current} {self.order_dict[self.mode]} {self.divergence_threshold}."
+                 " Signaling Trainer to stop."
+            )
+        elif self.monitor_op(current - self.min_delta, self.best_score.to(current.device)):
+            should_stop = False
+            reason = self._improvement_message(current)
+            self.best_score = current
+            self.wait_count = 0
+        else:
+            self.wait_count += 1
+            if self.wait_count >= self.patience:
+                 should_stop = True
+                 reason = (
+                      f"Monitored metric {self.monitor} did not improve in the last {self.wait_count} records."
+                      f" Best score: {self.best_score}. Signaling Trainer to stop."
+                 )
+
+        return should_stop, reason
+
 
 def get_argparse_groups(parser):
      groups = {}
@@ -71,7 +129,7 @@ if __name__ == '__main__':
 
      # Set up callbacks for logger
      callbacks = [ModelCheckpoint(dirpath=f"logs/{logger.version}", save_last=True, filename='{epoch}-last'),
-                  EarlyStopping(monitor="val_loss", patience=10)]
+                  ColossalEarlyStopping(patience=10, monitor="valid_loss", mode="min")]
      if args.num_eval_files:
           checkpoint_callback_pesq = ModelCheckpoint(dirpath=f"logs/{logger.version}", 
                save_top_k=2, monitor="pesq", mode="max", filename='{epoch}-{pesq:.2f}')
@@ -89,7 +147,8 @@ if __name__ == '__main__':
                                       initial_scale=32),
           precision=16,
           logger=logger,
-          log_every_n_steps=10, num_sanity_val_steps=0,
+          log_every_n_steps=10,
+          num_sanity_val_steps=0,
           callbacks=callbacks
      )
 

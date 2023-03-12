@@ -3,17 +3,29 @@ from math import ceil
 import warnings
 
 import torch
+import torch.nn as nn
 import pytorch_lightning as pl
 from torch_ema import ExponentialMovingAverage
 
 from sgmse import sampling
 from sgmse.sdes import SDERegistry, OUVESDE
 from sgmse.backbones import BackboneRegistry
-from sgmse.util.inference import evaluate_model
+from sgmse.util.inference import evaluate_model, test_model
 from sgmse.util.other import pad_spec
 
 from colossalai.nn.optimizer import HybridAdam
 from pytorch_lightning.strategies.colossalai import ColossalAIStrategy
+
+
+class LearnedLinearSchedule(nn.Module):
+    def __init__(self, gamma_min, gamma_max, **ignored_kwargs):
+        super().__init__()
+        self.b = nn.Parameter(torch.tensor(gamma_min))
+        self.w = nn.Parameter(torch.tensor(gamma_max - gamma_min))
+
+    def forward(self, t):
+        return self.b + self.w.abs() * t
+
 
 
 class ScoreModel(pl.LightningModule):
@@ -24,11 +36,14 @@ class ScoreModel(pl.LightningModule):
         parser.add_argument("--t_eps", type=float, default=0.03, help="The minimum time (3e-2 by default)")
         parser.add_argument("--num_eval_files", type=int, default=20, help="Number of files for speech enhancement performance evaluation during training. Pass 0 to turn off (no checkpoints based on evaluation metrics will be generated).")
         parser.add_argument("--loss_type", type=str, default="mse", choices=("mse", "mae"), help="The type of loss function to use.")
+        parser.add_argument("--gamma_max", type=float, default=10, help="The minimum time (3e-2 by default)")
+        parser.add_argument("--gamma_min", type=float, default=0.5, help="The minimum time (3e-2 by default)")
+        parser.add_argument("--variational", action="store_true", help="Use variational SDE")
         return parser
 
     def __init__(
         self, backbone, sde, lr=1e-4, ema_decay=0.999, t_eps=3e-2,
-        num_eval_files=20, loss_type='mse', data_module_cls=None, **kwargs
+        num_eval_files=20, loss_type='mse', data_module_cls=None, variational: bool = False, **kwargs
     ):
         """
         Create a new ScoreModel.
@@ -55,6 +70,7 @@ class ScoreModel(pl.LightningModule):
         self.t_eps = t_eps
         self.loss_type = loss_type
         self.num_eval_files = num_eval_files
+        self.variational = variational
 
         self.save_hyperparameters(ignore=['no_wandb'])
         self.data_module = data_module_cls(**kwargs, gpu=kwargs.get('gpus', 0) > 0)
@@ -64,7 +80,10 @@ class ScoreModel(pl.LightningModule):
     def configure_sharded_model(self) -> None:
         self.dnn = self.dnn_cls(**self.kwargs)
         self.sde = self.sde_cls(**self.kwargs)
-        self.ema = ExponentialMovingAverage(self.dnn.parameters(), decay=self.ema_decay)
+        self.schedule = None
+        if self.variational:
+            self.schedule = LearnedLinearSchedule(**self.kwargs)
+        self.ema = ExponentialMovingAverage(self.parameters(), decay=self.ema_decay)
         if self.backbone == "ncsnpp":
             self.dnn.gradient_checkpoint_enable()
 
@@ -124,6 +143,8 @@ class ScoreModel(pl.LightningModule):
         x, y = batch
         t = torch.rand(x.shape[0], device=x.device) * (self.sde.T - self.t_eps) + self.t_eps
         mean, std = self.sde.marginal_prob(x, t, y)
+        if self.schedule is not None:
+            mean = self.schedule(mean)
         z = torch.randn_like(x)  # i.i.d. normal distributed with var=0.5
         sigmas = std[:, None, None, None]
         perturbed_data = mean + sigmas * z
